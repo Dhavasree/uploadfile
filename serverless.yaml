@@ -1,0 +1,213 @@
+service: gfb-data-pipeline-trigger
+frameworkVersion: "=1.32.0"
+
+plugins:
+  - serverless-prune-plugin
+  - serverless-plugin-lambda-dead-letter
+custom:
+  successSnsTopic: "gfbSuccessSnsTopic"
+  failureSnsTopic: "gfbFailureSnsTopic"
+  stage: ${opt:stage, self:provider.stage}
+  version: ${env:BUILD_VERSION, env:RV, self:custom.stage}
+  dev:
+    accountid: 423319072129
+    igniteaccountid: 252342758521
+  nonprod:
+    accountid: 423319072129
+    igniteaccountid: 252342758521
+    environment:
+      system_environment: "nonprod"
+  production:
+    accountid: 664643933020
+    igniteaccountid: 678977883400
+    environment:
+      system_environment: "production"
+
+provider:
+  name: aws
+  runtime: python3.6
+  environment:
+    system_env: ${self:custom.stage}
+  stackTags:
+    environment: ${self:custom.stage}
+    team: das
+    project: gfb
+    component: gfb-event-processor
+    owneremail: ATLAS-API@coxautoinc.com
+  role: gfbDataPipelineRole
+  vpc:
+    securityGroupIds: ${self:custom.${self:custom.stage}.securityGroupIds}
+    subnetIds: ${self:custom.${self:custom.stage}.subnetIds}
+
+package:
+  include:
+      - common/**
+      - application.py
+      - catfacts.json
+  exclude:
+      - requirements.txt
+      - serverless.yml
+      - README.md
+      - LICENSE.txt
+      - config/**
+      - .idea/
+      - .serverless/
+
+functions:
+  processEvent:
+    handler: application.handler
+    timeout: 30
+    description: Service to process gfb records.
+    events:
+      - schedule:
+          rate: cron(0 11 * * ? *)
+          enabled: true
+          inputPath: '$.stageVariables'
+
+resources:
+  Resources:
+    gfbDataPipelineRole:
+      Type: "AWS::IAM::Role"
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Effect: "Allow"
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action:
+                - "sts:AssumeRole"
+        Path: "/"
+        Policies:
+          - PolicyName: defaultPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: arn:aws:logs:*:*:log-group:/aws/lambda/*:*:*
+                - Effect: Allow
+                  Action:
+                    - sns:Publish
+                    - sns:CreateTopic
+                  Resource: { "Fn::Join" : ["", ["arn:aws:sns:${self:provider.region}:", "${self:custom.${self:custom.stage}.igniteaccountid}:" , "gfbSuccessSnsTopic" ] ]  }
+                - Effect: "Allow"
+                  Action:
+                    - "s3:PutObject"
+                  Resource:
+                    Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - "Ref" : "ServerlessDeploymentBucket"
+                - Effect: Allow
+                  Action:
+                    - ec2:CreateNetworkInterface
+                    - ec2:DescribeNetworkInterfaces
+                    - ec2:DetachNetworkInterface
+                    - ec2:DeleteNetworkInterface
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - datapipeline:CreatePipeline
+                    - datapipeline:ActivatePipeline
+                    - datapipeline:PutPipelineDefinition
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - iam:PassRole
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - elasticmapreduce:*
+                  Resource: "*"
+    gfbDataPipelineRoleDef:
+      Type: "AWS::IAM::Role"
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Effect: "Allow"
+              Principal:
+                Service:
+                  - datapipeline.amazonaws.com
+                  - elasticmapreduce.amazonaws.com
+              Action:
+                - "sts:AssumeRole"
+        Path: "/"
+        RoleName: gfbDataPipelineRole
+        Policies:
+          - PolicyName: gfbDataPipelinePolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                   - cloudwatch:*
+                   - datapipeline:DescribeObjects
+                   - datapipeline:EvaluateExpression
+                   - dynamodb:BatchGetItem
+                   - dynamodb:DescribeTable
+                   - dynamodb:GetItem
+                   - dynamodb:Query
+                   - dynamodb:Scan
+                   - dynamodb:UpdateTable
+                   - ec2:AuthorizeSecurityGroupIngress
+                   - ec2:CancelSpotInstanceRequests
+                   - ec2:CreateSecurityGroup
+                   - ec2:CreateTags
+                   - ec2:DeleteTags
+                   - ec2:Describe*
+                   - ec2:ModifyImageAttribute
+                   - ec2:ModifyInstanceAttribute
+                   - ec2:RequestSpotInstances
+                   - ec2:RunInstances
+                   - ec2:StartInstances
+                   - ec2:StopInstances
+                   - ec2:TerminateInstances
+                   - ec2:AuthorizeSecurityGroupEgress
+                   - ec2:DeleteSecurityGroup
+                   - ec2:RevokeSecurityGroupEgress
+                   - ec2:DescribeNetworkInterfaces
+                   - ec2:CreateNetworkInterface
+                   - ec2:DeleteNetworkInterface
+                   - ec2:DetachNetworkInterface
+                   - elasticmapreduce:*
+                   - iam:GetInstanceProfile
+                   - iam:GetRole
+                   - iam:GetRolePolicy
+                   - iam:ListAttachedRolePolicies
+                   - iam:ListRolePolicies
+                   - iam:ListInstanceProfiles
+                   - iam:PassRole
+                   - rds:DescribeDBInstances
+                   - rds:DescribeDBSecurityGroups
+                   - redshift:DescribeClusters
+                   - redshift:DescribeClusterSecurityGroups
+                   - s3:CreateBucket
+                   - s3:DeleteObject
+                   - s3:Get*
+                   - s3:List*
+                   - s3:Put*
+                   - sdb:BatchPutAttributes
+                   - sdb:Select*
+                   - sns:GetTopicAttributes
+                   - sns:ListTopics
+                   - sns:Publish
+                   - sns:Subscribe
+                   - sns:Unsubscribe
+                   - sqs:CreateQueue
+                   - sqs:Delete*
+                   - sqs:GetQueue*
+                   - sqs:PurgeQueue
+                   - sqs:ReceiveMessage
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - sns:*
+                  Resource: { "Fn::Join" : ["", ["arn:aws:sns:${self:provider.region}:", "${self:custom.${self:custom.stage}.igniteaccountid}:" , "gfbSuccessSnsTopic" ] ]  }
